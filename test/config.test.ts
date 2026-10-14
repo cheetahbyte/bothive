@@ -12,6 +12,7 @@ describe("configuration", () => {
     expect(config.JOB_BACKOFF_BASE_MS).toBe(1_000);
     expect(config.JOB_MAX_ATTEMPTS).toBe(3);
     expect(config.RUN_TIMEOUT_MS).toBe(60_000);
+    expect(config.SHUTDOWN_TIMEOUT_MS).toBe(10_000);
   });
 
   it("parses custom timing and retry values from environment", () => {
@@ -22,6 +23,7 @@ describe("configuration", () => {
       JOB_BACKOFF_BASE_MS: "250",
       JOB_MAX_ATTEMPTS: "5",
       RUN_TIMEOUT_MS: "10000",
+      SHUTDOWN_TIMEOUT_MS: "3000",
     });
 
     expect(config.JOB_LEASE_DURATION_MS).toBe(5000);
@@ -29,6 +31,7 @@ describe("configuration", () => {
     expect(config.JOB_BACKOFF_BASE_MS).toBe(250);
     expect(config.JOB_MAX_ATTEMPTS).toBe(5);
     expect(config.RUN_TIMEOUT_MS).toBe(10_000);
+    expect(config.SHUTDOWN_TIMEOUT_MS).toBe(3000);
   });
 
   it("rejects invalid timing values", () => {
@@ -49,5 +52,11 @@ describe("configuration", () => {
       RUN_TIMEOUT_MS: "not-a-number",
     });
     expect(nonNumericTimeout.success).toBe(false);
+
+    const invalidShutdown = configSchema.safeParse({
+      DATABASE_URL: "postgresql://bothive:bothive@localhost:5432/bothive",
+      SHUTDOWN_TIMEOUT_MS: "-1",
+    });
+    expect(invalidShutdown.success).toBe(false);
   });
 });

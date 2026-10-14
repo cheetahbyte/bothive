@@ -36,7 +36,11 @@ export function request(token: string | null, path: string, body?: unknown, meth
 }
 
 export function startTestWorker(options?: WorkerOptions, registry: RuntimeRegistry = testRegistry) {
-  const worker = createWorker(db, registry, { pollIntervalMs: 20, ...options });
+  const worker = createWorker(db, registry, {
+    pollIntervalMs: 20,
+    shutdownTimeoutMs: 0,
+    ...options,
+  });
   void worker.start();
   return worker;
 }
@@ -50,10 +54,70 @@ export function spawnWorkerProcess(env?: Record<string, string>) {
     process: proc,
     stop: () =>
       new Promise<void>((resolve) => {
+        if (proc.exitCode !== null || proc.signalCode !== null) return resolve();
         proc.on("exit", () => resolve());
         proc.kill("SIGTERM");
       }),
+    waitForExit: () =>
+      new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        if (proc.exitCode !== null || proc.signalCode !== null) {
+          resolve({ code: proc.exitCode, signal: proc.signalCode });
+        } else {
+          proc.on("exit", (code, signal) => resolve({ code, signal }));
+        }
+      }),
   };
+}
+
+export function spawnApiProcess(env?: Record<string, string>) {
+  const port = env?.PORT ?? String(3400 + Math.floor(Math.random() * 2000));
+  const proc = spawn(process.execPath, ["src/api/main.ts"], {
+    env: { PATH: process.env.PATH, DATABASE_URL: databaseUrl, PORT: port, ...env },
+    stdio: "pipe",
+  });
+  let stderr = "";
+  let stdout = "";
+  proc.stderr?.on("data", (d) => {
+    stderr += d.toString();
+  });
+  proc.stdout?.on("data", (d) => {
+    stdout += d.toString();
+  });
+  return {
+    port: Number(port),
+    url: `http://localhost:${port}`,
+    process: proc,
+    getStderr: () => stderr,
+    getStdout: () => stdout,
+    stop: () =>
+      new Promise<void>((resolve) => {
+        if (proc.exitCode !== null || proc.signalCode !== null) return resolve();
+        proc.on("exit", () => resolve());
+        proc.kill("SIGTERM");
+      }),
+    waitForExit: () =>
+      new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        if (proc.exitCode !== null || proc.signalCode !== null) {
+          resolve({ code: proc.exitCode, signal: proc.signalCode });
+        } else {
+          proc.on("exit", (code, signal) => resolve({ code, signal }));
+        }
+      }),
+  };
+}
+
+export async function waitForApi(baseUrl: string, timeoutMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      if (res.ok) return;
+    } catch {
+      // API process starting
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`Timed out waiting for API at ${baseUrl}`);
 }
 
 export async function waitForJob(

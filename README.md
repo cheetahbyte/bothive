@@ -21,6 +21,16 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/bots
 
 Revoke with `token revoke <token-id>`. Configuration is in `.env.example`.
 
+## Scaling workers
+
+Scale the number of concurrent worker processes:
+
+```sh
+docker compose up -d --scale worker=3
+```
+
+Workers claim Jobs independently and shut down gracefully on stop signals.
+
 ## Configuration
 
 See `.env.example` for all options and defaults:
@@ -32,4 +42,5 @@ See `.env.example` for all options and defaults:
 - `JOB_BACKOFF_BASE_MS`: Base duration for retry exponential backoff (default: 1000).
 - `JOB_MAX_ATTEMPTS`: Maximum execution attempts before failing (default: 3).
 - `RUN_TIMEOUT_MS`: Time limit for a single Run attempt before aborting (default: 60000).
+- `SHUTDOWN_TIMEOUT_MS`: Time limit in milliseconds for in-flight requests or Jobs to complete during graceful shutdown before releasing or aborting (default: 10000).
 

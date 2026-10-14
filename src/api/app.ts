@@ -36,6 +36,8 @@ const notFound = { error: "not_found" } as const;
 export function createApp(db: Db, registry: RuntimeRegistry) {
   const app = new Hono<Env>();
 
+  app.get("/health", (c) => c.json({ status: "ok" }));
+
   app.use("*", async (c, next) => {
     const match = /^Bearer\s+(\S+)$/i.exec(c.req.header("authorization") ?? "");
     const user = match ? await authenticate(db, match[1]!) : null;

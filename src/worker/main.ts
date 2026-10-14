@@ -17,15 +17,24 @@ const worker = createWorker(db, registry, {
   backoffBaseMs: config.JOB_BACKOFF_BASE_MS,
   maxAttempts: config.JOB_MAX_ATTEMPTS,
   runTimeoutMs: config.RUN_TIMEOUT_MS,
+  shutdownTimeoutMs: config.SHUTDOWN_TIMEOUT_MS,
 });
 console.log("Worker started");
 void worker.start();
 
+let shuttingDown: Promise<void> | null = null;
+
 function shutdown() {
-  void worker
+  shuttingDown ??= worker
     .stop()
-    .then(() => close())
-    .then(() => process.exit(0));
+    .then(close)
+    .then(
+      () => process.exit(0),
+      (error: unknown) => {
+        console.error("Worker shutdown failed:", error);
+        process.exit(1);
+      },
+    );
 }
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
