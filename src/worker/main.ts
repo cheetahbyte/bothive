@@ -12,6 +12,11 @@ const registry = createRuntimeRegistry([fakeRuntime]);
 
 const worker = createWorker(db, registry, {
   botId: config.WORKER_BOT_ID,
+  leaseDurationMs: config.JOB_LEASE_DURATION_MS,
+  renewIntervalMs: config.JOB_RENEW_INTERVAL_MS,
+  backoffBaseMs: config.JOB_BACKOFF_BASE_MS,
+  maxAttempts: config.JOB_MAX_ATTEMPTS,
+  runTimeoutMs: config.RUN_TIMEOUT_MS,
 });
 console.log("Worker started");
 void worker.start();

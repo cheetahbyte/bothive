@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Job } from "../conversations/jobs.ts";
 import type { Db } from "../db/client.ts";
 import { bots, conversations, jobs, messages, runs } from "../db/schema.ts";
@@ -9,7 +9,81 @@ export type WorkerOptions = {
   workerId?: string;
   pollIntervalMs?: number;
   botId?: string;
+  leaseDurationMs?: number;
+  renewIntervalMs?: number;
+  backoffBaseMs?: number;
+  maxAttempts?: number;
+  runTimeoutMs?: number;
 };
+
+export type ReaperOptions = {
+  maxAttempts?: number;
+  backoffBaseMs?: number;
+  botId?: string;
+};
+
+const releasedLease = { leaseOwner: null, leaseToken: null, leaseExpiresAt: null };
+
+function holdsLease(job: Job) {
+  return and(
+    eq(jobs.id, job.id),
+    eq(jobs.status, "running"),
+    eq(jobs.leaseToken, job.leaseToken!),
+    sql`${jobs.leaseExpiresAt} > NOW()`,
+  );
+}
+
+export async function reapExpiredJobs(db: Db, options: ReaperOptions = {}): Promise<number> {
+  const maxAttempts = options.maxAttempts ?? 3;
+  const backoffBaseMs = options.backoffBaseMs ?? 1_000;
+
+  return db.transaction(async (tx) => {
+    const expired = await tx
+      .select({
+        id: jobs.id,
+        attempt: jobs.attempt,
+      })
+      .from(jobs)
+      .innerJoin(conversations, eq(conversations.id, jobs.conversationId))
+      .where(
+        and(
+          eq(jobs.status, "running"),
+          sql`${jobs.leaseExpiresAt} IS NOT NULL`,
+          sql`${jobs.leaseExpiresAt} <= NOW()`,
+          ...(options.botId ? [eq(conversations.botId, options.botId)] : []),
+        ),
+      )
+      .for("update", { skipLocked: true });
+
+    if (expired.length === 0) return 0;
+
+    for (const job of expired) {
+      if (job.attempt >= maxAttempts) {
+        await tx
+          .update(jobs)
+          .set({
+            status: "failed",
+            failureReason: "lease_expired",
+            ...releasedLease,
+          })
+          .where(eq(jobs.id, job.id));
+      } else {
+        const backoffMs = backoffBaseMs * Math.pow(2, Math.max(0, job.attempt - 1));
+
+        await tx
+          .update(jobs)
+          .set({
+            status: "queued",
+            ...releasedLease,
+            nextEligibleAt: sql`NOW() + (${backoffMs} || ' milliseconds')::interval`,
+          })
+          .where(eq(jobs.id, job.id));
+      }
+    }
+
+    return expired.length;
+  });
+}
 
 export class Worker {
   readonly id: string;
@@ -29,6 +103,11 @@ export class Worker {
       workerId: this.id,
       pollIntervalMs: options.pollIntervalMs ?? 100,
       botId: options.botId,
+      leaseDurationMs: options.leaseDurationMs ?? 30_000,
+      renewIntervalMs: options.renewIntervalMs ?? 10_000,
+      backoffBaseMs: options.backoffBaseMs ?? 1_000,
+      maxAttempts: options.maxAttempts ?? 3,
+      runTimeoutMs: options.runTimeoutMs ?? 60_000,
     };
   }
 
@@ -45,6 +124,14 @@ export class Worker {
     });
   }
 
+  async reapExpiredJobs(): Promise<number> {
+    return reapExpiredJobs(this.db, {
+      maxAttempts: this.options.maxAttempts,
+      backoffBaseMs: this.options.backoffBaseMs,
+      botId: this.options.botId,
+    });
+  }
+
   async claimJob(): Promise<Job | null> {
     return this.db.transaction(async (tx) => {
       const [claimed] = await tx
@@ -52,9 +139,11 @@ export class Worker {
         .from(jobs)
         .innerJoin(conversations, eq(conversations.id, jobs.conversationId))
         .where(
-          this.options.botId
-            ? and(eq(jobs.status, "queued"), eq(conversations.botId, this.options.botId))
-            : eq(jobs.status, "queued"),
+          and(
+            eq(jobs.status, "queued"),
+            sql`${jobs.nextEligibleAt} <= NOW()`,
+            ...(this.options.botId ? [eq(conversations.botId, this.options.botId)] : []),
+          ),
         )
         .orderBy(jobs.createdAt)
         .limit(1)
@@ -62,9 +151,17 @@ export class Worker {
 
       if (!claimed) return null;
 
+      const leaseToken = randomUUID();
+
       const [job] = await tx
         .update(jobs)
-        .set({ status: "running" })
+        .set({
+          status: "running",
+          attempt: sql`${jobs.attempt} + 1`,
+          leaseOwner: this.id,
+          leaseToken,
+          leaseExpiresAt: sql`NOW() + (${this.options.leaseDurationMs} || ' milliseconds')::interval`,
+        })
         .where(eq(jobs.id, claimed.id))
         .returning();
 
@@ -72,7 +169,16 @@ export class Worker {
     });
   }
 
+  private async failClaimedJob(job: Job, failureReason: string) {
+    await this.db
+      .update(jobs)
+      .set({ status: "failed", failureReason, ...releasedLease })
+      .where(holdsLease(job));
+  }
+
   async runOnce(): Promise<boolean> {
+    await this.reapExpiredJobs();
+
     const job = await this.claimJob();
     if (!job) return false;
 
@@ -82,26 +188,24 @@ export class Worker {
       .where(eq(conversations.id, job.conversationId));
 
     if (!conversation) {
-      await this.db
-        .update(jobs)
-        .set({ status: "failed", failureReason: "conversation_not_found" })
-        .where(eq(jobs.id, job.id));
+      await this.failClaimedJob(job, "conversation_not_found");
       return true;
     }
 
     const [bot] = await this.db.select().from(bots).where(eq(bots.id, conversation.botId));
 
     if (!bot) {
-      await this.db
-        .update(jobs)
-        .set({ status: "failed", failureReason: "bot_not_found" })
-        .where(eq(jobs.id, job.id));
+      await this.failClaimedJob(job, "bot_not_found");
       return true;
     }
 
     const runtime = this.registry.get(bot.runtimeId);
     if (!runtime) {
       await this.db.transaction(async (tx) => {
+        const [currentJob] = await tx.select().from(jobs).where(holdsLease(job)).for("update");
+
+        if (!currentJob) return;
+
         const [run] = await tx
           .insert(runs)
           .values({
@@ -122,6 +226,7 @@ export class Worker {
             status: "failed",
             runId: run!.id,
             failureReason: "runtime_unavailable",
+            ...releasedLease,
           })
           .where(eq(jobs.id, job.id));
       });
@@ -137,8 +242,41 @@ export class Worker {
     const abortController = new AbortController();
     this.activeControllers.add(abortController);
 
+    let timedOut = false;
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    if (this.options.runTimeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        abortController.abort(new Error("run_timeout"));
+      }, this.options.runTimeoutMs);
+    }
+
+    let lostLease = false;
+    let renewTimer: NodeJS.Timeout | null = null;
+    if (this.options.renewIntervalMs > 0) {
+      renewTimer = setInterval(async () => {
+        try {
+          const updated = await this.db
+            .update(jobs)
+            .set({
+              leaseExpiresAt: sql`NOW() + (${this.options.leaseDurationMs} || ' milliseconds')::interval`,
+            })
+            .where(holdsLease(job))
+            .returning({ id: jobs.id });
+
+          if (updated.length === 0) {
+            lostLease = true;
+            abortController.abort(new Error("lease_lost"));
+            if (renewTimer) clearInterval(renewTimer);
+          }
+        } catch (renewError) {
+          console.error("Worker failed to renew lease:", renewError);
+        }
+      }, this.options.renewIntervalMs);
+    }
+
     let completed = false;
-    let failedEvent: { reason: string } | null = null;
+    let failedEvent: { reason: string; retryable?: boolean } | null = null;
     let outputText = "";
     let usage: Record<string, unknown> = {};
 
@@ -161,27 +299,44 @@ export class Worker {
         } else if (event.type === "completed") {
           completed = true;
         } else if (event.type === "failed") {
-          failedEvent = { reason: event.error ?? event.reason ?? "runtime_failed" };
+          failedEvent = {
+            reason: event.error ?? event.reason ?? "runtime_failed",
+            retryable: event.retryable ?? false,
+          };
           break;
         }
       }
     } catch (error) {
-      failedEvent = { reason: error instanceof Error ? error.message : String(error) };
+      if (timedOut) {
+        failedEvent = { reason: "run_timeout", retryable: false };
+      } else if (lostLease) {
+        failedEvent = { reason: "lease_lost", retryable: false };
+      } else {
+        const retryable = Boolean(
+          error && typeof error === "object" && "retryable" in error && error.retryable,
+        );
+        failedEvent = {
+          reason: error instanceof Error ? error.message : String(error),
+          retryable,
+        };
+      }
     } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (renewTimer) clearInterval(renewTimer);
       this.activeControllers.delete(abortController);
     }
 
-    if (!completed && !failedEvent) {
-      failedEvent = { reason: "stream_ended_without_completion" };
+    if (timedOut && !failedEvent) {
+      failedEvent = { reason: "run_timeout", retryable: false };
+    } else if (lostLease && !failedEvent) {
+      failedEvent = { reason: "lease_lost", retryable: false };
+    } else if (!completed && !failedEvent) {
+      failedEvent = { reason: "stream_ended_without_completion", retryable: false };
     }
 
     try {
       await this.db.transaction(async (tx) => {
-        const [currentJob] = await tx
-          .select()
-          .from(jobs)
-          .where(and(eq(jobs.id, job.id), eq(jobs.status, "running")))
-          .for("update");
+        const [currentJob] = await tx.select().from(jobs).where(holdsLease(job)).for("update");
 
         if (!currentJob) {
           return;
@@ -203,14 +358,31 @@ export class Worker {
             })
             .returning();
 
-          await tx
-            .update(jobs)
-            .set({
-              status: "failed",
-              runId: run!.id,
-              failureReason: failedEvent.reason,
-            })
-            .where(eq(jobs.id, job.id));
+          if (failedEvent.retryable && currentJob.attempt < this.options.maxAttempts) {
+            const backoffMs =
+              this.options.backoffBaseMs * Math.pow(2, Math.max(0, currentJob.attempt - 1));
+
+            await tx
+              .update(jobs)
+              .set({
+                status: "queued",
+                runId: run!.id,
+                failureReason: failedEvent.reason,
+                ...releasedLease,
+                nextEligibleAt: sql`NOW() + (${backoffMs} || ' milliseconds')::interval`,
+              })
+              .where(eq(jobs.id, job.id));
+          } else {
+            await tx
+              .update(jobs)
+              .set({
+                status: "failed",
+                runId: run!.id,
+                failureReason: failedEvent.reason,
+                ...releasedLease,
+              })
+              .where(eq(jobs.id, job.id));
+          }
         } else {
           const [run] = await tx
             .insert(runs)
@@ -242,6 +414,7 @@ export class Worker {
               status: "succeeded",
               runId: run!.id,
               failureReason: null,
+              ...releasedLease,
             })
             .where(eq(jobs.id, job.id));
         }
