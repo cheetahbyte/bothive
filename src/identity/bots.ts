@@ -53,7 +53,7 @@ export async function getBot(db: Db, userId: string, botId: string) {
   return row ? botSchema.parse(row.bot) : null;
 }
 
-export async function getBotAccessRole(db: Db, userId: string, botId: string) {
+export async function getBotAccessRole(db: Pick<Db, "select">, userId: string, botId: string) {
   const [grant] = await db
     .select({ role: accessGrants.role })
     .from(accessGrants)
