@@ -37,10 +37,17 @@ function holdsLease(job: Job) {
   );
 }
 
+async function failRun(tx: Tx, runId: string, failureReason: string) {
+  await tx
+    .update(runs)
+    .set({ status: "failed", failureReason, finishedAt: new Date() })
+    .where(eq(runs.id, runId));
+}
+
 export async function reapExpiredJobs(db: Db, policy: RetryPolicy, botId?: string) {
   return db.transaction(async (tx) => {
     const expired = await tx
-      .select({ id: jobs.id, attempt: jobs.attempt })
+      .select({ id: jobs.id, attempt: jobs.attempt, runId: jobs.runId })
       .from(jobs)
       .innerJoin(conversations, eq(conversations.id, jobs.conversationId))
       .where(
@@ -61,6 +68,7 @@ export async function reapExpiredJobs(db: Db, policy: RetryPolicy, botId?: strin
               },
         )
         .where(eq(jobs.id, job.id));
+      if (job.runId) await failRun(tx, job.runId, "lease_expired");
     }
     return expired.length;
   });
@@ -140,6 +148,7 @@ export async function claimJob(db: Db, options: ClaimOptions): Promise<Job | "re
       .for("update");
     const [bot] = await tx
       .select({
+        runtimeId: bots.runtimeId,
         concurrencyLimit: bots.concurrencyLimit,
         disabledAt: bots.disabledAt,
         deletedAt: bots.deletedAt,
@@ -182,6 +191,7 @@ export async function claimJob(db: Db, options: ClaimOptions): Promise<Job | "re
       return null;
     }
 
+    const runId = randomUUID();
     const [job] = await tx
       .update(jobs)
       .set({
@@ -190,10 +200,23 @@ export async function claimJob(db: Db, options: ClaimOptions): Promise<Job | "re
         leaseOwner: options.workerId,
         leaseToken: randomUUID(),
         leaseExpiresAt: fromNow(options.leaseDurationMs),
+        runId,
       })
       .where(eq(jobs.id, candidate.id))
       .returning();
-    return job ?? null;
+    if (!job) return null;
+
+    await tx.insert(runs).values({
+      id: runId,
+      jobId: job.id,
+      conversationId: job.conversationId,
+      userId: job.userId,
+      botId: candidate.botId,
+      runtimeId: bot.runtimeId,
+      attempt: job.attempt,
+      status: "running",
+    });
+    return job;
   });
 }
 
@@ -208,22 +231,30 @@ export async function renewLease(db: Db, job: Job, leaseDurationMs: number) {
 
 // A released attempt never ran to an outcome, so it does not count towards the maximum.
 export async function releaseJob(db: Db, job: Job) {
-  await db
-    .update(jobs)
-    .set({
-      status: "queued",
-      attempt: sql`GREATEST(0, ${jobs.attempt} - 1)`,
-      ...releasedLease,
-      nextEligibleAt: sql`NOW()`,
-    })
-    .where(holdsLease(job));
+  await db.transaction(async (tx) => {
+    const [released] = await tx
+      .update(jobs)
+      .set({
+        status: "queued",
+        attempt: sql`GREATEST(0, ${jobs.attempt} - 1)`,
+        ...releasedLease,
+        nextEligibleAt: sql`NOW()`,
+      })
+      .where(holdsLease(job))
+      .returning({ runId: jobs.runId });
+    if (released?.runId) await failRun(tx, released.runId, "lease_expired");
+  });
 }
 
 export async function failJob(db: Db, job: Job, failureReason: string) {
-  await db
-    .update(jobs)
-    .set({ status: "failed", failureReason, ...releasedLease })
-    .where(holdsLease(job));
+  await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(jobs)
+      .set({ status: "failed", failureReason, ...releasedLease })
+      .where(holdsLease(job))
+      .returning({ runId: jobs.runId });
+    if (updated?.runId) await failRun(tx, updated.runId, failureReason);
+  });
 }
 
 export async function finishJob(
@@ -243,21 +274,16 @@ export async function finishJob(
       : { status: "failed", reason: "revoked", retryable: false, usage: outcome.usage };
 
     const failureReason = effective.status === "failed" ? effective.reason : null;
-    const [run] = await tx
-      .insert(runs)
-      .values({
-        jobId: job.id,
-        conversationId: job.conversationId,
-        userId: job.userId,
-        botId: bot.id,
-        runtimeId: bot.runtimeId,
+    await tx
+      .update(runs)
+      .set({
         status: effective.status,
         usage: effective.usage,
         failureReason,
         finishedAt: new Date(),
       })
-      .returning({ id: runs.id });
-    const transition = { runId: run!.id, failureReason, ...releasedLease };
+      .where(eq(runs.id, current.runId!));
+    const transition = { failureReason, ...releasedLease };
 
     if (effective.status === "succeeded") {
       await tx.insert(messages).values({
