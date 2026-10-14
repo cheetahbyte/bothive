@@ -1,0 +1,38 @@
+{
+  "name": "bothive",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "api": "node --env-file-if-exists=.env src/api/main.ts",
+    "cli": "node --env-file-if-exists=.env src/cli/main.ts",
+    "migrate": "node --env-file-if-exists=.env src/cli/main.ts migrate",
+    "db:generate": "drizzle-kit generate",
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test drizzle.config.ts vitest.config.ts",
+    "format:check": "oxfmt --check src test drizzle.config.ts vitest.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "drizzle-orm": "^0.45.4",
+    "drizzle-zod": "^0.8.3",
+    "hono": "^4.13.13",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11",
+    "oxfmt": "^0.73.0",
+    "oxlint": "^1.88.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
