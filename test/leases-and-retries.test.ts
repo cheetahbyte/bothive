@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fakeRuntime } from "../src/runtime/fake.ts";
-import { reapExpiredJobs } from "../src/worker/worker.ts";
+import { reapExpiredJobs } from "../src/worker/queue.ts";
 import {
   createUserWithToken,
   db,
@@ -195,11 +195,7 @@ describe("leases, retries and runtime failure handling", () => {
       await new Promise((r) => setTimeout(r, 200));
 
       // Trigger reaper for this bot to either re-queue with backoff or fail on 3rd attempt
-      await reapExpiredJobs(db, {
-        botId: bot.id,
-        maxAttempts: 3,
-        backoffBaseMs: 30,
-      });
+      await reapExpiredJobs(db, { maxAttempts: 3, backoffBaseMs: 30 }, bot.id);
 
       if (attempt < 3) {
         // Wait out the backoff so the next attempt is eligible
