@@ -10,6 +10,7 @@ export const configSchema = z.object({
   JOB_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(3),
   RUN_TIMEOUT_MS: z.coerce.number().int().min(1).default(60_000),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).default(10_000),
+  USER_CONCURRENCY_LIMIT: z.coerce.number().int().min(1).default(8),
 });
 
 export type Config = z.infer<typeof configSchema>;

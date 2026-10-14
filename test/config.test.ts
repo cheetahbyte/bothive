@@ -13,6 +13,7 @@ describe("configuration", () => {
     expect(config.JOB_MAX_ATTEMPTS).toBe(3);
     expect(config.RUN_TIMEOUT_MS).toBe(60_000);
     expect(config.SHUTDOWN_TIMEOUT_MS).toBe(10_000);
+    expect(config.USER_CONCURRENCY_LIMIT).toBe(8);
   });
 
   it("parses custom timing and retry values from environment", () => {
@@ -24,6 +25,7 @@ describe("configuration", () => {
       JOB_MAX_ATTEMPTS: "5",
       RUN_TIMEOUT_MS: "10000",
       SHUTDOWN_TIMEOUT_MS: "3000",
+      USER_CONCURRENCY_LIMIT: "4",
     });
 
     expect(config.JOB_LEASE_DURATION_MS).toBe(5000);
@@ -32,6 +34,7 @@ describe("configuration", () => {
     expect(config.JOB_MAX_ATTEMPTS).toBe(5);
     expect(config.RUN_TIMEOUT_MS).toBe(10_000);
     expect(config.SHUTDOWN_TIMEOUT_MS).toBe(3000);
+    expect(config.USER_CONCURRENCY_LIMIT).toBe(4);
   });
 
   it("rejects invalid timing values", () => {
@@ -58,5 +61,11 @@ describe("configuration", () => {
       SHUTDOWN_TIMEOUT_MS: "-1",
     });
     expect(invalidShutdown.success).toBe(false);
+
+    const invalidUserConcurrency = configSchema.safeParse({
+      DATABASE_URL: "postgresql://bothive:bothive@localhost:5432/bothive",
+      USER_CONCURRENCY_LIMIT: "0",
+    });
+    expect(invalidUserConcurrency.success).toBe(false);
   });
 });

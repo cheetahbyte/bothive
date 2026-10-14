@@ -14,6 +14,7 @@ export type FakeScript = {
   retryable?: boolean;
   hang?: boolean;
   delayMs?: number;
+  waitFor?: Promise<unknown>;
   endEarly?: boolean;
   events?: RuntimeEvent[];
   onExecute?: (signal: AbortSignal) => void;
@@ -118,6 +119,20 @@ export class FakeAgentRuntime implements AgentRuntime {
 
     if (script.delayMs) {
       await delay(script.delayMs, signal);
+      if (signal.aborted) throw new Error("aborted");
+    }
+
+    if (script.waitFor) {
+      await Promise.race([
+        script.waitFor,
+        new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+      ]);
       if (signal.aborted) throw new Error("aborted");
     }
 
