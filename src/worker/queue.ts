@@ -3,7 +3,7 @@ import { and, eq, type SQL, sql } from "drizzle-orm";
 import type { Job } from "../conversations/jobs.ts";
 import type { Db } from "../db/client.ts";
 import { bots, conversations, jobs, messages, runs, users } from "../db/schema.ts";
-import type { Bot } from "../identity/bots.ts";
+import { getBotAccessRole, type Bot } from "../identity/bots.ts";
 import type { RuntimeUsage } from "../runtime/types.ts";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -156,6 +156,14 @@ export async function claimJob(db: Db, options: ClaimOptions): Promise<Job | "re
       return "rejected";
     }
 
+    if (!(await getBotAccessRole(tx, candidate.userId, candidate.botId))) {
+      await tx
+        .update(jobs)
+        .set({ status: "failed", failureReason: "revoked" })
+        .where(eq(jobs.id, candidate.id));
+      return "rejected";
+    }
+
     const [counts] = await tx
       .execute<{ conversation: number; bot: number; user: number }>(
         sql`SELECT * FROM ${runningFor({
@@ -229,7 +237,12 @@ export async function finishJob(
     const [current] = await tx.select().from(jobs).where(holdsLease(job)).for("update");
     if (!current) return;
 
-    const failureReason = outcome.status === "failed" ? outcome.reason : null;
+    // Revoked during the Run: the reply is discarded and the Job fails without retry.
+    const effective: RunOutcome = (await getBotAccessRole(tx, job.userId, bot.id))
+      ? outcome
+      : { status: "failed", reason: "revoked", retryable: false, usage: outcome.usage };
+
+    const failureReason = effective.status === "failed" ? effective.reason : null;
     const [run] = await tx
       .insert(runs)
       .values({
@@ -238,26 +251,26 @@ export async function finishJob(
         userId: job.userId,
         botId: bot.id,
         runtimeId: bot.runtimeId,
-        status: outcome.status,
-        usage: outcome.usage,
+        status: effective.status,
+        usage: effective.usage,
         failureReason,
         finishedAt: new Date(),
       })
       .returning({ id: runs.id });
     const transition = { runId: run!.id, failureReason, ...releasedLease };
 
-    if (outcome.status === "succeeded") {
+    if (effective.status === "succeeded") {
       await tx.insert(messages).values({
         conversationId: job.conversationId,
         botId: bot.id,
-        content: outcome.text,
+        content: effective.text,
         jobId: job.id,
       });
       await tx
         .update(jobs)
         .set({ status: "succeeded", ...transition })
         .where(eq(jobs.id, job.id));
-    } else if (outcome.retryable && current.attempt < policy.maxAttempts) {
+    } else if (effective.retryable && current.attempt < policy.maxAttempts) {
       await tx
         .update(jobs)
         .set({
