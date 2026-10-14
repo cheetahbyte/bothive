@@ -68,6 +68,15 @@ describe("bots", () => {
     expect(response.status).toBe(400);
   });
 
+  it("rejects creating a Bot with an unregistered runtime", async () => {
+    const alice = await createUserWithToken();
+    const response = await request(alice.token, "/bots", {
+      name: "Helper",
+      runtimeId: "unregistered",
+    });
+    expect(response.status).toBe(400);
+  });
+
   it("rejects unauthenticated Bot creation", async () => {
     expect((await request(null, "/bots", validBot)).status).toBe(401);
   });

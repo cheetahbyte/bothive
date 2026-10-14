@@ -1,10 +1,15 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/api/app.ts";
 import { createDb } from "../src/db/client.ts";
+import { fakeRuntime } from "../src/runtime/fake.ts";
+import { createRuntimeRegistry, type RuntimeRegistry } from "../src/runtime/registry.ts";
+import { createWorker, type WorkerOptions } from "../src/worker/worker.ts";
 import { databaseUrl, runCli } from "./cli.ts";
 
 export const { db, close } = createDb(databaseUrl);
-export const app = createApp(db);
+export const testRegistry: RuntimeRegistry = createRuntimeRegistry([fakeRuntime]);
+export const app = createApp(db, testRegistry);
 
 export async function createUserWithToken() {
   const name = `user-${randomUUID()}`;
@@ -27,4 +32,25 @@ export function request(token: string | null, path: string, body?: unknown) {
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+export function startTestWorker(options?: WorkerOptions, registry: RuntimeRegistry = testRegistry) {
+  const worker = createWorker(db, registry, { pollIntervalMs: 20, ...options });
+  void worker.start();
+  return worker;
+}
+
+export function spawnWorkerProcess(env?: Record<string, string>) {
+  const proc = spawn(process.execPath, ["src/worker/main.ts"], {
+    env: { PATH: process.env.PATH, DATABASE_URL: databaseUrl, ...env },
+    stdio: "pipe",
+  });
+  return {
+    process: proc,
+    stop: () =>
+      new Promise<void>((resolve) => {
+        proc.on("exit", () => resolve());
+        proc.kill("SIGTERM");
+      }),
+  };
 }

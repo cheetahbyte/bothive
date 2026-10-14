@@ -8,14 +8,16 @@ import {
 } from "../conversations/conversations.ts";
 import { getJob } from "../conversations/jobs.ts";
 import { createMessage, createMessageSchema, listMessages } from "../conversations/messages.ts";
+import { getRun } from "../conversations/runs.ts";
 import { createBot, createBotSchema, getBot, listBots } from "../identity/bots.ts";
 import { authenticate } from "../identity/users.ts";
+import type { RuntimeRegistry } from "../runtime/registry.ts";
 
 type Env = { Variables: { userId: string } };
 
 const notFound = { error: "not_found" } as const;
 
-export function createApp(db: Db) {
+export function createApp(db: Db, registry: RuntimeRegistry) {
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {
@@ -31,6 +33,12 @@ export function createApp(db: Db) {
     const input = createBotSchema.safeParse(body);
     if (!input.success) {
       return c.json({ error: "invalid_request", issues: z.treeifyError(input.error) }, 400);
+    }
+    if (!registry.has(input.data.runtimeId)) {
+      return c.json(
+        { error: "invalid_request", message: `Unknown runtime: ${input.data.runtimeId}` },
+        400,
+      );
     }
     return c.json(await createBot(db, c.get("userId"), input.data), 201);
   });
@@ -104,6 +112,12 @@ export function createApp(db: Db) {
     const id = z.uuid().safeParse(c.req.param("id"));
     const job = id.success ? await getJob(db, c.get("userId"), id.data) : null;
     return job ? c.json(job) : c.json(notFound, 404);
+  });
+
+  app.get("/runs/:id", async (c) => {
+    const id = z.uuid().safeParse(c.req.param("id"));
+    const run = id.success ? await getRun(db, c.get("userId"), id.data) : null;
+    return run ? c.json(run) : c.json(notFound, 404);
   });
 
   app.notFound((c) => c.json(notFound, 404));

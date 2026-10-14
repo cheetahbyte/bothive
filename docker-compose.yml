@@ -24,5 +24,14 @@ services:
       postgres:
         condition: service_healthy
 
+  worker:
+    build: .
+    command: ["node", "dist/worker/main.js"]
+    environment:
+      DATABASE_URL: postgresql://bothive:${POSTGRES_PASSWORD}@postgres:5432/bothive
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres-data:

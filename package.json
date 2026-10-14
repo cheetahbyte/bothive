@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "api": "node --env-file-if-exists=.env src/api/main.ts",
+    "worker": "node --env-file-if-exists=.env src/worker/main.ts",
     "cli": "node --env-file-if-exists=.env src/cli/main.ts",
     "migrate": "node --env-file-if-exists=.env src/cli/main.ts migrate",
     "db:generate": "drizzle-kit generate",
