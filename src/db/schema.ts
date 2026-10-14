@@ -37,6 +37,9 @@ export const bots = pgTable("bots", {
   name: text().notNull(),
   runtimeId: text().notNull(),
   runtimeSettings: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  concurrencyLimit: integer().notNull().default(4),
+  disabledAt: timestamp({ withTimezone: true }),
+  deletedAt: timestamp({ withTimezone: true }),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 

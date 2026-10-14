@@ -9,7 +9,17 @@ import {
 import { getJob } from "../conversations/jobs.ts";
 import { createMessage, createMessageSchema, listMessages } from "../conversations/messages.ts";
 import { getRun } from "../conversations/runs.ts";
-import { createBot, createBotSchema, getBot, listBots } from "../identity/bots.ts";
+import {
+  createBot,
+  createBotSchema,
+  deleteBot,
+  disableBot,
+  enableBot,
+  getBot,
+  listBots,
+  updateBot,
+  updateBotSchema,
+} from "../identity/bots.ts";
 import {
   createAccessGrantSchema,
   grantAccess,
@@ -55,6 +65,63 @@ export function createApp(db: Db, registry: RuntimeRegistry) {
     const id = z.uuid().safeParse(c.req.param("id"));
     const bot = id.success ? await getBot(db, c.get("userId"), id.data) : null;
     return bot ? c.json(bot) : c.json(notFound, 404);
+  });
+
+  app.patch("/bots/:id", async (c) => {
+    const id = z.uuid().safeParse(c.req.param("id"));
+    if (!id.success) return c.json(notFound, 404);
+
+    const body: unknown = await c.req.json().catch(() => null);
+    const input = updateBotSchema.safeParse(body);
+    if (!input.success) {
+      return c.json({ error: "invalid_request", issues: z.treeifyError(input.error) }, 400);
+    }
+
+    if (input.data.runtimeId !== undefined && !registry.has(input.data.runtimeId)) {
+      return c.json(
+        { error: "invalid_request", message: `Unknown runtime: ${input.data.runtimeId}` },
+        400,
+      );
+    }
+
+    const result = await updateBot(db, c.get("userId"), id.data, input.data);
+    if (!result.success) {
+      return c.json(notFound, 404);
+    }
+    return c.json(result.bot);
+  });
+
+  app.post("/bots/:id/disable", async (c) => {
+    const id = z.uuid().safeParse(c.req.param("id"));
+    if (!id.success) return c.json(notFound, 404);
+
+    const result = await disableBot(db, c.get("userId"), id.data);
+    if (!result.success) {
+      return c.json(notFound, 404);
+    }
+    return c.json(result.bot);
+  });
+
+  app.post("/bots/:id/enable", async (c) => {
+    const id = z.uuid().safeParse(c.req.param("id"));
+    if (!id.success) return c.json(notFound, 404);
+
+    const result = await enableBot(db, c.get("userId"), id.data);
+    if (!result.success) {
+      return c.json(notFound, 404);
+    }
+    return c.json(result.bot);
+  });
+
+  app.delete("/bots/:id", async (c) => {
+    const id = z.uuid().safeParse(c.req.param("id"));
+    if (!id.success) return c.json(notFound, 404);
+
+    const result = await deleteBot(db, c.get("userId"), id.data);
+    if (!result.success) {
+      return c.json(notFound, 404);
+    }
+    return c.json({ success: true });
   });
 
   app.get("/bots/:botId/grants", async (c) => {
@@ -131,7 +198,13 @@ export function createApp(db: Db, registry: RuntimeRegistry) {
     }
 
     const result = await createMessage(db, c.get("userId"), convId.data, input.data);
-    return result ? c.json(result.message, 201) : c.json(notFound, 404);
+    if (!result.success) {
+      if (result.error === "bot_disabled") {
+        return c.json({ error: "bot_disabled" }, 400);
+      }
+      return c.json(notFound, 404);
+    }
+    return c.json(result.message, 201);
   });
 
   app.get("/conversations/:conversationId/messages", async (c) => {

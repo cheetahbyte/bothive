@@ -55,3 +55,34 @@ export function spawnWorkerProcess(env?: Record<string, string>) {
       }),
   };
 }
+
+export async function waitForJob(
+  token: string,
+  jobId: string,
+  timeoutMs = 5000,
+): Promise<{
+  id: string;
+  status: string;
+  attempt: number;
+  runId?: string | null;
+  failureReason?: string | null;
+}> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const res = await request(token, `/jobs/${jobId}`);
+    if (res.status === 200) {
+      const job = (await res.json()) as {
+        id: string;
+        status: string;
+        attempt: number;
+        runId?: string | null;
+        failureReason?: string | null;
+      };
+      if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") {
+        return job;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`Timed out waiting for job ${jobId}`);
+}

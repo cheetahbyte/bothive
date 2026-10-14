@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { createSelectSchema } from "drizzle-zod";
 import type { Db } from "../db/client.ts";
-import { accessGrants, conversations } from "../db/schema.ts";
+import { accessGrants, bots, conversations } from "../db/schema.ts";
 import { getBot } from "../identity/bots.ts";
 
 export const conversationSchema = createSelectSchema(conversations);
@@ -32,6 +32,7 @@ export async function getConversation(db: Db, userId: string, conversationId: st
   const [row] = await db
     .select({ conversation: conversations })
     .from(conversations)
+    .innerJoin(bots, eq(bots.id, conversations.botId))
     .innerJoin(
       accessGrants,
       and(
@@ -39,6 +40,12 @@ export async function getConversation(db: Db, userId: string, conversationId: st
         eq(accessGrants.userId, conversations.userId),
       ),
     )
-    .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)));
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.userId, userId),
+        isNull(bots.deletedAt),
+      ),
+    );
   return row ? conversationSchema.parse(row.conversation) : null;
 }

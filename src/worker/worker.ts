@@ -132,12 +132,13 @@ export class Worker {
     });
   }
 
-  async claimJob(): Promise<Job | null> {
+  async claimJob(): Promise<Job | "rejected" | null> {
     return this.db.transaction(async (tx) => {
       const [claimed] = await tx
-        .select({ id: jobs.id })
+        .select({ id: jobs.id, disabledAt: bots.disabledAt, deletedAt: bots.deletedAt })
         .from(jobs)
         .innerJoin(conversations, eq(conversations.id, jobs.conversationId))
+        .innerJoin(bots, eq(bots.id, conversations.botId))
         .where(
           and(
             eq(jobs.status, "queued"),
@@ -147,9 +148,20 @@ export class Worker {
         )
         .orderBy(jobs.createdAt)
         .limit(1)
-        .for("update", { skipLocked: true });
+        .for("update", { of: jobs, skipLocked: true });
 
       if (!claimed) return null;
+
+      if (claimed.deletedAt || claimed.disabledAt) {
+        await tx
+          .update(jobs)
+          .set({
+            status: "failed",
+            failureReason: claimed.deletedAt ? "bot_deleted" : "bot_disabled",
+          })
+          .where(eq(jobs.id, claimed.id));
+        return "rejected";
+      }
 
       const leaseToken = randomUUID();
 
@@ -181,6 +193,7 @@ export class Worker {
 
     const job = await this.claimJob();
     if (!job) return false;
+    if (job === "rejected") return true;
 
     const [conversation] = await this.db
       .select()
