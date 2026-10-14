@@ -6,9 +6,9 @@ import {
   getConversation,
   listConversations,
 } from "../conversations/conversations.ts";
-import { getJob } from "../conversations/jobs.ts";
+import { getJob, listBotJobs } from "../conversations/jobs.ts";
 import { createMessage, createMessageSchema, listMessages } from "../conversations/messages.ts";
-import { getRun } from "../conversations/runs.ts";
+import { getRun, listBotRuns } from "../conversations/runs.ts";
 import {
   createBot,
   createBotSchema,
@@ -230,6 +230,20 @@ export function createApp(db: Db, registry: RuntimeRegistry) {
     }
 
     return c.json(result.messages);
+  });
+
+  app.get("/bots/:botId/jobs", async (c) => {
+    const botId = z.uuid().safeParse(c.req.param("botId"));
+    if (!botId.success) return c.json(notFound, 404);
+    const list = await listBotJobs(db, c.get("userId"), botId.data);
+    return list ? c.json(list) : c.json(notFound, 404);
+  });
+
+  app.get("/bots/:botId/runs", async (c) => {
+    const botId = z.uuid().safeParse(c.req.param("botId"));
+    if (!botId.success) return c.json(notFound, 404);
+    const list = await listBotRuns(db, c.get("userId"), botId.data);
+    return list ? c.json(list) : c.json(notFound, 404);
   });
 
   app.get("/jobs/:id", async (c) => {

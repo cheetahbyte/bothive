@@ -137,6 +137,7 @@ export const runs = pgTable(
       .notNull()
       .references(() => bots.id),
     runtimeId: text().notNull(),
+    attempt: integer().notNull().default(1),
     status: runStatus().notNull(),
     usage: jsonb().$type<Record<string, unknown>>().notNull().default({}),
     failureReason: text(),
