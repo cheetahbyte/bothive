@@ -1,8 +1,8 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 import type { Db } from "../db/client.ts";
-import { jobs, messages } from "../db/schema.ts";
+import { accessGrants, bots, conversations, jobs, messages } from "../db/schema.ts";
 import { getConversation } from "./conversations.ts";
 
 export const messageSchema = createSelectSchema(messages);
@@ -16,14 +16,37 @@ export const createMessageSchema = z.object({
 
 export type CreateMessageInput = z.infer<typeof createMessageSchema>;
 
+export type CreateMessageResult =
+  | { success: true; message: Message; created: boolean }
+  | { success: false; error: "not_found" | "bot_disabled" };
+
 export async function createMessage(
   db: Db,
   userId: string,
   conversationId: string,
   input: CreateMessageInput,
-) {
-  const conv = await getConversation(db, userId, conversationId);
-  if (!conv) return null;
+): Promise<CreateMessageResult> {
+  const [row] = await db
+    .select({ conversation: conversations, bot: bots })
+    .from(conversations)
+    .innerJoin(bots, eq(bots.id, conversations.botId))
+    .innerJoin(
+      accessGrants,
+      and(
+        eq(accessGrants.botId, conversations.botId),
+        eq(accessGrants.userId, conversations.userId),
+      ),
+    )
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.userId, userId),
+        isNull(bots.deletedAt),
+      ),
+    );
+
+  if (!row) return { success: false, error: "not_found" };
+  if (row.bot.disabledAt) return { success: false, error: "bot_disabled" };
 
   return db.transaction(async (tx) => {
     const [existing] = await tx
@@ -36,7 +59,7 @@ export async function createMessage(
         ),
       );
     if (existing) {
-      return { message: messageSchema.parse(existing), created: false };
+      return { success: true, message: messageSchema.parse(existing), created: false };
     }
 
     const [job] = await tx
@@ -59,7 +82,7 @@ export async function createMessage(
       })
       .returning();
 
-    return { message: messageSchema.parse(msg), created: true };
+    return { success: true, message: messageSchema.parse(msg), created: true };
   });
 }
 
