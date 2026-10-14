@@ -40,3 +40,11 @@ export async function getBot(db: Db, userId: string, botId: string) {
     .where(and(eq(bots.id, botId), eq(accessGrants.userId, userId)));
   return row ? botSchema.parse(row.bot) : null;
 }
+
+export async function getBotAccessRole(db: Db, userId: string, botId: string) {
+  const [grant] = await db
+    .select({ role: accessGrants.role })
+    .from(accessGrants)
+    .where(and(eq(accessGrants.botId, botId), eq(accessGrants.userId, userId)));
+  return grant ? grant.role : null;
+}

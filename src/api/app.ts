@@ -9,6 +9,12 @@ import {
 import { getJob } from "../conversations/jobs.ts";
 import { createMessage, createMessageSchema, listMessages } from "../conversations/messages.ts";
 import { createBot, createBotSchema, getBot, listBots } from "../identity/bots.ts";
+import {
+  createAccessGrantSchema,
+  grantAccess,
+  listAccessGrants,
+  revokeAccess,
+} from "../identity/grants.ts";
 import { authenticate } from "../identity/users.ts";
 
 type Env = { Variables: { userId: string } };
@@ -41,6 +47,49 @@ export function createApp(db: Db) {
     const id = z.uuid().safeParse(c.req.param("id"));
     const bot = id.success ? await getBot(db, c.get("userId"), id.data) : null;
     return bot ? c.json(bot) : c.json(notFound, 404);
+  });
+
+  app.get("/bots/:botId/grants", async (c) => {
+    const botId = z.uuid().safeParse(c.req.param("botId"));
+    if (!botId.success) return c.json(notFound, 404);
+    const result = await listAccessGrants(db, c.get("userId"), botId.data);
+    if (!result.success) return c.json(notFound, 404);
+    return c.json(result.grants);
+  });
+
+  app.post("/bots/:botId/grants", async (c) => {
+    const botId = z.uuid().safeParse(c.req.param("botId"));
+    if (!botId.success) return c.json(notFound, 404);
+
+    const body: unknown = await c.req.json().catch(() => null);
+    const input = createAccessGrantSchema.safeParse(body);
+    if (!input.success) {
+      return c.json({ error: "invalid_request", issues: z.treeifyError(input.error) }, 400);
+    }
+
+    const result = await grantAccess(db, c.get("userId"), botId.data, input.data);
+    if (!result.success) {
+      if (result.error === "invalid_target") {
+        return c.json({ error: "invalid_request" }, 400);
+      }
+      return c.json(notFound, 404);
+    }
+    return c.json(result.grant, 201);
+  });
+
+  app.delete("/bots/:botId/grants/:userId", async (c) => {
+    const botId = z.uuid().safeParse(c.req.param("botId"));
+    const userId = z.uuid().safeParse(c.req.param("userId"));
+    if (!botId.success || !userId.success) return c.json(notFound, 404);
+
+    const result = await revokeAccess(db, c.get("userId"), botId.data, userId.data);
+    if (!result.success) {
+      if (result.error === "invalid_target") {
+        return c.json({ error: "invalid_request" }, 400);
+      }
+      return c.json(notFound, 404);
+    }
+    return c.json({ success: true });
   });
 
   app.post("/bots/:botId/conversations", async (c) => {
