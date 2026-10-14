@@ -1,13 +1,24 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { createSelectSchema } from "drizzle-zod";
+import { z } from "zod";
 import type { Db } from "../db/client.ts";
 import { apiTokens, users } from "../db/schema.ts";
 import { generateApiToken, hashApiToken } from "./tokens.ts";
 
 export const userSchema = createSelectSchema(users);
 
+export const userNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .regex(/^\P{Cc}+$/u, "must not contain control characters");
+
 export async function createUser(db: Db, name: string) {
-  const [row] = await db.insert(users).values({ name }).returning();
+  const [row] = await db
+    .insert(users)
+    .values({ name: userNameSchema.parse(name) })
+    .returning();
   return userSchema.parse(row);
 }
 
@@ -28,6 +39,7 @@ export async function issueApiToken(db: Db, userName: string) {
 }
 
 export async function revokeApiToken(db: Db, tokenId: string) {
+  if (!z.uuid().safeParse(tokenId).success) return false;
   const revoked = await db
     .update(apiTokens)
     .set({ revokedAt: new Date() })

@@ -2,7 +2,13 @@ import { parseArgs } from "node:util";
 import { loadConfig } from "../config.ts";
 import { createDb } from "../db/client.ts";
 import { runMigrations } from "../db/migrate.ts";
-import { createUser, issueApiToken, listUsers, revokeApiToken } from "../identity/users.ts";
+import {
+  createUser,
+  issueApiToken,
+  listUsers,
+  revokeApiToken,
+  userNameSchema,
+} from "../identity/users.ts";
 
 const usage = `Usage:
   cli migrate
@@ -16,9 +22,24 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-const { positionals } = parseArgs({ allowPositionals: true });
+function parseCliArgs() {
+  try {
+    return parseArgs({
+      allowPositionals: true,
+      options: { help: { type: "boolean", short: "h" } },
+    });
+  } catch {
+    return fail(usage);
+  }
+}
+
+const { values, positionals } = parseCliArgs();
 const [group, action, arg] = positionals;
 
+if (values.help) {
+  console.log(usage);
+  process.exit(0);
+}
 if (!group) fail(usage);
 
 const config = loadConfig(process.env);
@@ -29,7 +50,9 @@ try {
     await runMigrations(db);
     console.log("Migrations applied");
   } else if (group === "user" && action === "create" && arg) {
-    const user = await createUser(db, arg);
+    const name = userNameSchema.safeParse(arg);
+    if (!name.success) fail(`Invalid user name: ${name.error.issues[0]?.message}`);
+    const user = await createUser(db, name.data);
     console.log(`${user.id}\t${user.name}`);
   } else if (group === "user" && action === "list") {
     for (const user of await listUsers(db)) console.log(`${user.id}\t${user.name}`);

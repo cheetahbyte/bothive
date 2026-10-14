@@ -28,6 +28,22 @@ describe("boot configuration", () => {
   });
 });
 
+describe("CLI arguments", () => {
+  it("prints usage and exits 0 for --help and -h", async () => {
+    for (const flag of ["--help", "-h"]) {
+      const result = await runCli([flag]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Usage:");
+    }
+  });
+
+  it("prints usage and exits 1 for unknown options", async () => {
+    const result = await runCli(["user", "list", "--bogus"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Usage:");
+  });
+});
+
 describe("migrations", () => {
   it("are an explicit CLI step and are idempotent", async () => {
     const result = await runCli(["migrate"]);
@@ -49,6 +65,14 @@ describe("users", () => {
     const name = `user-${randomUUID()}`;
     await runCli(["user", "create", name]);
     expect((await runCli(["user", "create", name])).code).toBe(1);
+  });
+
+  it("are rejected with a blank, overlong or control-character name", async () => {
+    for (const name of ["   ", "x".repeat(101), "a\tb", "a\nb"]) {
+      const result = await runCli(["user", "create", name]);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("Invalid user name");
+    }
   });
 });
 
@@ -90,5 +114,11 @@ describe("API tokens", () => {
     const { tokenId } = await createUserWithToken();
     expect((await runCli(["token", "revoke", tokenId])).code).toBe(0);
     expect((await runCli(["token", "revoke", tokenId])).code).toBe(1);
+  });
+
+  it("reject a malformed token ID with a clear error", async () => {
+    const result = await runCli(["token", "revoke", "invalid-id"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("No active token with ID: invalid-id");
   });
 });
