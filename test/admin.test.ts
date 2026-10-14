@@ -110,6 +110,14 @@ describe("API tokens", () => {
     expect((await request(token, "/bots")).status).toBe(401);
   });
 
+  it("accept the Bearer scheme case-insensitively", async () => {
+    const { token } = await createUserWithToken();
+    for (const header of [`bearer ${token}`, `BEARER  ${token}`]) {
+      const response = await app.request("/bots", { headers: { authorization: header } });
+      expect(response.status).toBe(200);
+    }
+  });
+
   it("cannot be revoked twice", async () => {
     const { tokenId } = await createUserWithToken();
     expect((await runCli(["token", "revoke", tokenId])).code).toBe(0);

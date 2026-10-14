@@ -12,7 +12,7 @@ export function createApp(db: Db) {
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {
-    const match = /^Bearer (\S+)$/.exec(c.req.header("authorization") ?? "");
+    const match = /^Bearer\s+(\S+)$/i.exec(c.req.header("authorization") ?? "");
     const user = match ? await authenticate(db, match[1]!) : null;
     if (!user) return c.json({ error: "unauthorized" }, 401);
     c.set("userId", user.id);
