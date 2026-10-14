@@ -25,6 +25,7 @@ export type WorkerOptions = {
   maxAttempts?: number;
   runTimeoutMs?: number;
   shutdownTimeoutMs?: number;
+  userConcurrencyLimit?: number;
 };
 
 type AbortReason = "run_timeout" | "lease_lost" | "shutdown";
@@ -109,6 +110,7 @@ export class Worker {
       maxAttempts: options.maxAttempts ?? 3,
       runTimeoutMs: options.runTimeoutMs ?? 60_000,
       shutdownTimeoutMs: options.shutdownTimeoutMs ?? 10_000,
+      userConcurrencyLimit: options.userConcurrencyLimit ?? 8,
     };
   }
 

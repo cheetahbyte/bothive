@@ -18,6 +18,7 @@ const worker = createWorker(db, registry, {
   maxAttempts: config.JOB_MAX_ATTEMPTS,
   runTimeoutMs: config.RUN_TIMEOUT_MS,
   shutdownTimeoutMs: config.SHUTDOWN_TIMEOUT_MS,
+  userConcurrencyLimit: config.USER_CONCURRENCY_LIMIT,
 });
 console.log("Worker started");
 void worker.start();

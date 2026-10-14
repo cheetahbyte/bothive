@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, type SQL, sql } from "drizzle-orm";
 import type { Job } from "../conversations/jobs.ts";
 import type { Db } from "../db/client.ts";
-import { bots, conversations, jobs, messages, runs } from "../db/schema.ts";
+import { bots, conversations, jobs, messages, runs, users } from "../db/schema.ts";
 import type { Bot } from "../identity/bots.ts";
 import type { RuntimeUsage } from "../runtime/types.ts";
+
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 export type RetryPolicy = { maxAttempts: number; backoffBaseMs: number };
 
@@ -64,37 +66,112 @@ export async function reapExpiredJobs(db: Db, policy: RetryPolicy, botId?: strin
   });
 }
 
-export type ClaimOptions = { workerId: string; leaseDurationMs: number; botId?: string };
+export type ClaimOptions = {
+  workerId: string;
+  leaseDurationMs: number;
+  userConcurrencyLimit: number;
+  botId?: string;
+};
+
+type Candidate = { id: string; conversationId: string; userId: string; botId: string };
+
+// Running Jobs that count against a candidate's Conversation, Bot and User limits.
+function runningFor(candidate: { conversationId: SQL; botId: SQL; userId: SQL }) {
+  return sql`(
+    SELECT
+      count(*) FILTER (WHERE r.conversation_id = ${candidate.conversationId})::int AS conversation,
+      count(*) FILTER (WHERE c.bot_id = ${candidate.botId})::int AS bot,
+      count(*) FILTER (WHERE r.user_id = ${candidate.userId})::int AS user
+    FROM ${jobs} r
+    JOIN ${conversations} c ON c.id = r.conversation_id
+    WHERE r.status = 'running'
+  )`;
+}
+
+async function findCandidate(tx: Tx, options: ClaimOptions): Promise<Candidate | undefined> {
+  const running = runningFor({
+    conversationId: sql`${jobs.conversationId}`,
+    botId: sql`${conversations.botId}`,
+    userId: sql`${jobs.userId}`,
+  });
+  const [candidate] = await tx
+    .select({
+      id: jobs.id,
+      conversationId: jobs.conversationId,
+      userId: jobs.userId,
+      botId: conversations.botId,
+    })
+    .from(jobs)
+    .innerJoin(conversations, eq(conversations.id, jobs.conversationId))
+    .innerJoin(bots, eq(bots.id, conversations.botId))
+    .where(
+      and(
+        eq(jobs.status, "queued"),
+        sql`${jobs.nextEligibleAt} <= NOW()`,
+        ...forBot(options.botId),
+        // Message order: an earlier queued Job of the same Conversation goes first, even in backoff.
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${jobs} earlier
+          WHERE earlier.conversation_id = ${jobs.conversationId}
+            AND earlier.status = 'queued'
+            AND (earlier.created_at, earlier.id) < (${jobs.createdAt}, ${jobs.id})
+        )`,
+        sql`(SELECT conversation = 0 FROM ${running} counts)`,
+        sql`(SELECT bot < ${bots.concurrencyLimit} FROM ${running} counts)`,
+        sql`(SELECT "user" < ${options.userConcurrencyLimit} FROM ${running} counts)`,
+      ),
+    )
+    .orderBy(jobs.createdAt, jobs.id)
+    .limit(1)
+    .for("update", { of: jobs, skipLocked: true });
+  return candidate;
+}
 
 export async function claimJob(db: Db, options: ClaimOptions): Promise<Job | "rejected" | null> {
   return db.transaction(async (tx) => {
-    const [claimed] = await tx
-      .select({ id: jobs.id, disabledAt: bots.disabledAt, deletedAt: bots.deletedAt })
-      .from(jobs)
-      .innerJoin(conversations, eq(conversations.id, jobs.conversationId))
-      .innerJoin(bots, eq(bots.id, conversations.botId))
-      .where(
-        and(
-          eq(jobs.status, "queued"),
-          sql`${jobs.nextEligibleAt} <= NOW()`,
-          ...forBot(options.botId),
-        ),
-      )
-      .orderBy(jobs.createdAt)
-      .limit(1)
-      .for("update", { of: jobs, skipLocked: true });
+    const candidate = await findCandidate(tx, options);
+    if (!candidate) return null;
 
-    if (!claimed) return null;
+    // Locking the User, then the Bot, serializes competing claims so the recount below is exact.
+    await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, candidate.userId))
+      .for("update");
+    const [bot] = await tx
+      .select({
+        concurrencyLimit: bots.concurrencyLimit,
+        disabledAt: bots.disabledAt,
+        deletedAt: bots.deletedAt,
+      })
+      .from(bots)
+      .where(eq(bots.id, candidate.botId))
+      .for("update");
 
-    if (claimed.deletedAt || claimed.disabledAt) {
+    if (!bot || bot.deletedAt || bot.disabledAt) {
       await tx
         .update(jobs)
-        .set({
-          status: "failed",
-          failureReason: claimed.deletedAt ? "bot_deleted" : "bot_disabled",
-        })
-        .where(eq(jobs.id, claimed.id));
+        .set({ status: "failed", failureReason: bot?.disabledAt ? "bot_disabled" : "bot_deleted" })
+        .where(eq(jobs.id, candidate.id));
       return "rejected";
+    }
+
+    const [counts] = await tx
+      .execute<{ conversation: number; bot: number; user: number }>(
+        sql`SELECT * FROM ${runningFor({
+          conversationId: sql`${candidate.conversationId}::uuid`,
+          botId: sql`${candidate.botId}::uuid`,
+          userId: sql`${candidate.userId}::uuid`,
+        })} counts`,
+      )
+      .then((result) => result.rows);
+    if (
+      !counts ||
+      counts.conversation > 0 ||
+      counts.bot >= bot.concurrencyLimit ||
+      counts.user >= options.userConcurrencyLimit
+    ) {
+      return null;
     }
 
     const [job] = await tx
@@ -106,7 +183,7 @@ export async function claimJob(db: Db, options: ClaimOptions): Promise<Job | "re
         leaseToken: randomUUID(),
         leaseExpiresAt: fromNow(options.leaseDurationMs),
       })
-      .where(eq(jobs.id, claimed.id))
+      .where(eq(jobs.id, candidate.id))
       .returning();
     return job ?? null;
   });

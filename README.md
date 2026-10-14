@@ -43,4 +43,5 @@ See `.env.example` for all options and defaults:
 - `JOB_MAX_ATTEMPTS`: Maximum execution attempts before failing (default: 3).
 - `RUN_TIMEOUT_MS`: Time limit for a single Run attempt before aborting (default: 60000).
 - `SHUTDOWN_TIMEOUT_MS`: Time limit in milliseconds for in-flight requests or Jobs to complete during graceful shutdown before releasing or aborting (default: 10000).
+- `USER_CONCURRENCY_LIMIT`: Maximum concurrent running Jobs per User across all workers (default: 8).
 
