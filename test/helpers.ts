@@ -18,9 +18,10 @@ export async function createUserWithToken() {
   return { name, tokenId, token };
 }
 
-export function request(token: string | null, path: string, body?: unknown) {
+export function request(token: string | null, path: string, body?: unknown, method?: string) {
+  const resolvedMethod = method ?? (body === undefined ? "GET" : "POST");
   return app.request(path, {
-    method: body === undefined ? "GET" : "POST",
+    method: resolvedMethod,
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(body === undefined ? {} : { "content-type": "application/json" }),
