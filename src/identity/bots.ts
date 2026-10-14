@@ -6,6 +6,8 @@ import { accessGrants, bots } from "../db/schema.ts";
 
 export const botSchema = createSelectSchema(bots);
 
+export type Bot = typeof bots.$inferSelect;
+
 export const createBotSchema = createInsertSchema(bots, {
   name: (schema) => schema.trim().min(1).max(100),
   runtimeId: (schema) => schema.trim().min(1).max(100),

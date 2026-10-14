@@ -8,7 +8,7 @@ Self-hostable platform for persistent, independently owned AI bots. See `GLOSSAR
 export POSTGRES_PASSWORD=$(openssl rand -hex 16)
 docker compose up -d postgres
 docker compose run --rm api node dist/cli/main.js migrate
-docker compose up -d api
+docker compose up -d api worker
 docker compose run --rm api node dist/cli/main.js user create alice
 docker compose run --rm api node dist/cli/main.js token issue alice
 ```

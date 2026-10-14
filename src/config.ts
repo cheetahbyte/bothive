@@ -3,6 +3,7 @@ import { z } from "zod";
 const configSchema = z.object({
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  WORKER_BOT_ID: z.uuid().optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;

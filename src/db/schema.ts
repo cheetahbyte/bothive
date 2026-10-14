@@ -96,9 +96,48 @@ export const jobs = pgTable(
       .notNull()
       .references(() => users.id),
     status: jobStatus().notNull().default("queued"),
+    runId: uuid(),
+    failureReason: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index().on(table.conversationId), index().on(table.userId)],
+  (table) => [
+    index().on(table.conversationId),
+    index().on(table.userId),
+    index().on(table.status, table.createdAt),
+  ],
+);
+
+export const runStatus = pgEnum("run_status", ["running", "succeeded", "failed"]);
+
+export const runs = pgTable(
+  "runs",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    jobId: uuid()
+      .notNull()
+      .references(() => jobs.id),
+    conversationId: uuid()
+      .notNull()
+      .references(() => conversations.id),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id),
+    botId: uuid()
+      .notNull()
+      .references(() => bots.id),
+    runtimeId: text().notNull(),
+    status: runStatus().notNull(),
+    usage: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+    failureReason: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp({ withTimezone: true }),
+  },
+  (table) => [
+    index().on(table.jobId),
+    index().on(table.conversationId),
+    index().on(table.userId),
+    index().on(table.botId),
+  ],
 );
 
 export const messages = pgTable(
@@ -108,10 +147,9 @@ export const messages = pgTable(
     conversationId: uuid()
       .notNull()
       .references(() => conversations.id),
-    userId: uuid()
-      .notNull()
-      .references(() => users.id),
-    clientMessageId: text().notNull(),
+    userId: uuid().references(() => users.id),
+    botId: uuid().references(() => bots.id),
+    clientMessageId: text(),
     content: text().notNull(),
     jobId: uuid()
       .notNull()
@@ -121,5 +159,6 @@ export const messages = pgTable(
   (table) => [
     uniqueIndex().on(table.conversationId, table.clientMessageId),
     index().on(table.conversationId, table.createdAt),
+    index().on(table.botId),
   ],
 );

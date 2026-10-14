@@ -14,6 +14,7 @@ Vocabulary: see GLOSSARY.md. Decisions: docs/adr/.
 - Test: `TEST_DATABASE_URL=<postgres url> bun run test`
 - Admin CLI: `bun run cli -- <user|token|migrate> ...`
 - API: `bun run api`
+- Worker: `bun run worker`
 
 ## Rules
 
