@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   index,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -97,6 +98,11 @@ export const jobs = pgTable(
       .references(() => users.id),
     status: jobStatus().notNull().default("queued"),
     runId: uuid(),
+    attempt: integer().notNull().default(0),
+    leaseOwner: text(),
+    leaseToken: text(),
+    leaseExpiresAt: timestamp({ withTimezone: true }),
+    nextEligibleAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
     failureReason: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
@@ -104,6 +110,8 @@ export const jobs = pgTable(
     index().on(table.conversationId),
     index().on(table.userId),
     index().on(table.status, table.createdAt),
+    index().on(table.status, table.nextEligibleAt),
+    index().on(table.status, table.leaseExpiresAt),
   ],
 );
 

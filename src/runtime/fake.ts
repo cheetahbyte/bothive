@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   AgentRuntime,
   RunRequest,
@@ -10,11 +11,29 @@ export type FakeScript = {
   reply?: string;
   usage?: RuntimeUsage;
   fail?: string | Error;
+  retryable?: boolean;
   hang?: boolean;
+  delayMs?: number;
   endEarly?: boolean;
   events?: RuntimeEvent[];
   onExecute?: (signal: AbortSignal) => void;
 };
+
+const fakeSettingsSchema = z.looseObject({ delayMs: z.number().int().positive().optional() });
+
+function delay(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
 
 export class FakeAgentRuntime implements AgentRuntime {
   readonly id = "fake";
@@ -72,6 +91,12 @@ export class FakeAgentRuntime implements AgentRuntime {
     }
 
     if (!script) {
+      const settings = fakeSettingsSchema.safeParse(request.bot.runtimeSettings);
+      const delayMs = settings.success ? settings.data.delayMs : undefined;
+      if (delayMs) {
+        await delay(delayMs, signal);
+        if (signal.aborted) throw new Error("aborted");
+      }
       const lastMessage = request.messages[request.messages.length - 1];
       const replyText = lastMessage ? `Echo: ${lastMessage.content}` : "Hello from Bot!";
       yield { type: "output_text", text: replyText };
@@ -91,6 +116,11 @@ export class FakeAgentRuntime implements AgentRuntime {
       return;
     }
 
+    if (script.delayMs) {
+      await delay(script.delayMs, signal);
+      if (signal.aborted) throw new Error("aborted");
+    }
+
     if (script.hang) {
       await new Promise<void>((resolve) => {
         if (signal.aborted) {
@@ -107,7 +137,7 @@ export class FakeAgentRuntime implements AgentRuntime {
 
     if (script.fail) {
       const errorMsg = typeof script.fail === "string" ? script.fail : script.fail.message;
-      yield { type: "failed", error: errorMsg };
+      yield { type: "failed", error: errorMsg, retryable: script.retryable };
       return;
     }
 

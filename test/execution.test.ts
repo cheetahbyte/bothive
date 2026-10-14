@@ -272,6 +272,10 @@ describe("execution with fake Agent runtime", () => {
 
   it("fake runtime hangs until aborted when worker stops", async () => {
     let sawAbortSignal = false;
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
     const alice = await createUserWithToken();
     const bot = await createBotFor(alice);
 
@@ -285,6 +289,7 @@ describe("execution with fake Agent runtime", () => {
           },
           { once: true },
         );
+        markStarted();
       },
     });
 
@@ -301,23 +306,12 @@ describe("execution with fake Agent runtime", () => {
 
     const worker = startTestWorker({ botId: bot.id });
 
-    // Poll until Job transitions to running
-    const start = Date.now();
-    let isRunning = false;
-    while (Date.now() - start < 5000) {
-      const res = await request(alice.token, `/jobs/${msg.jobId}`);
-      if (res.status === 200) {
-        const job = (await res.json()) as { status: string };
-        if (job.status === "running") {
-          isRunning = true;
-          break;
-        }
-      }
-      await new Promise((r) => setTimeout(r, 20));
-    }
-    expect(isRunning).toBe(true);
+    await started;
+    const job = (await (await request(alice.token, `/jobs/${msg.jobId}`)).json()) as {
+      status: string;
+    };
+    expect(job.status).toBe("running");
 
-    // Stop worker and assert runtime received abort signal
     await worker.stop();
     expect(sawAbortSignal).toBe(true);
   });
